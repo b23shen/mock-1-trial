@@ -148,6 +148,7 @@ class Robot:
             "F": self.move_forward,
             "L": self.turn_left,
             "R": self.turn_right,
+            "B": self.move_backward,
         }
 
     def turn_left(self) -> None:
@@ -171,6 +172,17 @@ class Robot:
         """
         dx, dy = self.direction.delta
         next_x, next_y = self.x + dx, self.y + dy
+        if self.grid is None or self.grid.is_free(next_x, next_y):
+            self.x, self.y = next_x, next_y
+
+    def move_backward(self) -> None:
+        """Move one step in the current direction, if the next cell is free.
+
+        On a grid, the robot stays in place when the next cell is off the
+        grid or is an obstacle. This is not an error.
+        """
+        dx, dy = self.direction.delta
+        next_x, next_y = self.x - dx, self.y - dy
         if self.grid is None or self.grid.is_free(next_x, next_y):
             self.x, self.y = next_x, next_y
 
