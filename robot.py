@@ -1,19 +1,28 @@
-"""Simulate a robot that moves on a grid from a command string.
+"""Simulate robots (rovers) that move on a grid from command strings.
 
-The robot starts at (0, 0) facing North. North is +y and East is +x.
-Commands: F = move forward one step, L = turn left, R = turn right.
+A robot starts at (0, 0) facing North by default. North is +y and East
+is +x. Commands: F = forward, B = back, L = turn left, R = turn right.
 
-The grid is optional. Without one, the grid is infinite. With a `Grid`,
-the robot stays in place when the next cell is off the grid or blocked
-by an obstacle.
+A robot moves in a "world": anything with `is_free(x, y)`. Without a
+world, the grid is infinite. With a `Grid`, edges and obstacles block
+moves. With a `Fleet`, other rovers block moves too. A blocked robot
+stays in place; this is not an error.
 """
 
 import warnings
 from enum import Enum
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Protocol
 
-# The robot always starts here: the bottom-left corner of any grid.
+# The default start cell: the bottom-left corner of any grid.
 START: tuple[int, int] = (0, 0)
+
+
+class World(Protocol):
+    """Anything a robot can move in. `Grid` and `Fleet` both match this."""
+
+    def is_free(self, x: int, y: int) -> bool:
+        """Return True if a robot may enter cell (x, y)."""
+        ...
 
 
 class Direction(Enum):
@@ -134,16 +143,33 @@ class Robot:
     current state.
     """
 
-    def __init__(self, grid: Grid | None = None) -> None:
-        """Create a robot at (0, 0) facing North.
+    def __init__(
+        self,
+        grid: World | None = None,
+        x: int = START[0],
+        y: int = START[1],
+        direction: Direction = Direction.NORTH,
+    ) -> None:
+        """Create a robot at (x, y) facing `direction`.
 
         Args:
-            grid: The grid to move on. None means an infinite grid with
-                no obstacles.
+            grid: The world to move in, such as a Grid or a Fleet. None
+                means an infinite grid with no obstacles.
+            x: Start x coordinate. Defaults to 0.
+            y: Start y coordinate. Defaults to 0.
+            direction: Start direction. Defaults to North.
+
+        Raises:
+            ValueError: If the start cell is not free in `grid` (off the
+                grid, an obstacle, or another rover).
         """
-        self.grid: Grid | None = grid
-        self.x, self.y = START
-        self.direction: Direction = Direction.NORTH
+        # The start check lives here so a single robot and a fleet share it.
+        if grid is not None and not grid.is_free(x, y):
+            raise ValueError(f"Start cell ({x}, {y}) is not free")
+        self.grid: World | None = grid
+        self.x: int = x
+        self.y: int = y
+        self.direction: Direction = direction
         self._actions: dict[str, Callable[[], None]] = {
             "F": self.move_forward,
             "L": self.turn_left,
@@ -213,3 +239,111 @@ class Robot:
             A tuple (x, y, direction).
         """
         return (self.x, self.y, self.direction)
+
+
+class Fleet:
+    """Several rovers on one grid, each with a unique integer id.
+
+    A Fleet is also the world its rovers move in: a cell is free only if
+    the grid allows it and no other rover is there. Ids start at 1 and
+    are never reused, so a deleted id cannot point to a new rover.
+    """
+
+    def __init__(self, grid: Grid | None = None) -> None:
+        """Create an empty fleet.
+
+        Args:
+            grid: The shared grid. None means an infinite grid.
+        """
+        self.grid: Grid | None = grid
+        self._rovers: dict[int, Robot] = {}
+        self._next_id: int = 1
+
+    def is_free(self, x: int, y: int) -> bool:
+        """Check if a rover can enter a cell.
+
+        Args:
+            x: The x coordinate.
+            y: The y coordinate.
+
+        Returns:
+            True if the grid allows (x, y) and no rover is there.
+        """
+        if self.grid is not None and not self.grid.is_free(x, y):
+            return False
+        return all((r.x, r.y) != (x, y) for r in self._rovers.values())
+
+    def add(
+        self,
+        x: int = START[0],
+        y: int = START[1],
+        direction: Direction = Direction.NORTH,
+    ) -> int:
+        """Place a new rover and return its id.
+
+        Args:
+            x: Start x coordinate. Defaults to 0.
+            y: Start y coordinate. Defaults to 0.
+            direction: Start direction. Defaults to North.
+
+        Returns:
+            The new rover's id.
+
+        Raises:
+            ValueError: If the start cell is off the grid, an obstacle,
+                or holds another rover.
+        """
+        robot = Robot(self, x, y, direction)
+        rover_id = self._next_id
+        self._rovers[rover_id] = robot
+        self._next_id += 1
+        return rover_id
+
+    def get(self, rover_id: int) -> Robot:
+        """Return the rover with this id.
+
+        Args:
+            rover_id: The id returned by `add`.
+
+        Returns:
+            The rover.
+
+        Raises:
+            KeyError: If no rover has this id.
+        """
+        if rover_id not in self._rovers:
+            raise KeyError(f"No rover with id {rover_id}")
+        return self._rovers[rover_id]
+
+    def delete(self, rover_id: int) -> None:
+        """Remove a rover. Its cell becomes free.
+
+        Args:
+            rover_id: The id returned by `add`.
+
+        Raises:
+            KeyError: If no rover has this id.
+        """
+        self.get(rover_id)
+        del self._rovers[rover_id]
+
+    def execute(self, rover_id: int, commands: str) -> None:
+        """Run commands on one rover. Other rovers do not move.
+
+        Args:
+            rover_id: The id returned by `add`.
+            commands: The command string, for example "FFRB".
+
+        Raises:
+            KeyError: If no rover has this id.
+            TypeError: If `commands` is not a string.
+        """
+        self.get(rover_id).execute(commands)
+
+    def rovers(self) -> dict[int, Robot]:
+        """Return all rovers by id, in the order they were added.
+
+        Returns:
+            A new dict, so callers cannot change the fleet by editing it.
+        """
+        return dict(self._rovers)
